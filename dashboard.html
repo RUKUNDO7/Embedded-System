@@ -1,0 +1,862 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rukundo POS Command Center</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-1: #f7efe5;
+            --bg-2: #f3d3bd;
+            --ink: #1e1d1c;
+            --soft-ink: #5f5954;
+            --panel: #fffaf3;
+            --line: #d2c7bc;
+            --accent: #0d9488;
+            --accent-2: #ea580c;
+            --danger: #dc2626;
+            --ok: #15803d;
+            --shadow: 0 12px 32px rgba(30, 29, 28, 0.12);
+            --radius: 16px;
+        }
+
+        * { box-sizing: border-box; }
+        html, body { margin: 0; padding: 0; }
+        body {
+            min-height: 100vh;
+            font-family: "Space Grotesk", sans-serif;
+            color: var(--ink);
+            background:
+                radial-gradient(circle at 85% 8%, rgba(13, 148, 136, 0.2), transparent 36%),
+                radial-gradient(circle at 6% 85%, rgba(234, 88, 12, 0.25), transparent 34%),
+                linear-gradient(145deg, var(--bg-1), var(--bg-2));
+            padding: 24px;
+        }
+
+        .shell {
+            max-width: 1280px;
+            margin: 0 auto;
+            display: grid;
+            gap: 16px;
+            grid-template-columns: 1.25fr 1fr;
+        }
+
+        .panel {
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-radius: var(--radius);
+            box-shadow: var(--shadow);
+        }
+
+        .hero {
+            grid-column: 1 / -1;
+            padding: 22px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            position: sticky;
+            top: 12px;
+            z-index: 10;
+            backdrop-filter: blur(8px);
+        }
+
+        .hero h1 { margin: 0; font-size: 1.55rem; }
+        .hero p { margin: 4px 0 0; color: var(--soft-ink); }
+
+        .switch {
+            display: inline-flex;
+            background: #efe4d9;
+            border-radius: 999px;
+            padding: 4px;
+            border: 1px solid #ddcdbf;
+        }
+        .switch button {
+            border: none;
+            background: transparent;
+            padding: 10px 14px;
+            border-radius: 999px;
+            font-weight: 700;
+            cursor: pointer;
+            color: var(--soft-ink);
+        }
+        .switch button.active {
+            background: white;
+            color: var(--ink);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+        }
+
+        .workspace {
+            display: none;
+            gap: 16px;
+            grid-column: 1 / -1;
+        }
+        .workspace.active { display: grid; }
+        #pos-view { grid-template-columns: 1.4fr 1fr; }
+        #admin-view { grid-template-columns: 1fr 1fr; }
+
+        .catalog, .cart, .admin-form, .admin-monitor, .menu-admin {
+            padding: 18px;
+        }
+
+        .head-row {
+            display: flex;
+            align-items: end;
+            justify-content: space-between;
+            margin-bottom: 12px;
+            gap: 8px;
+        }
+        .head-row h2 { margin: 0; font-size: 1.1rem; }
+        .muted { color: var(--soft-ink); font-size: 0.93rem; }
+
+        .chips {
+            display: flex;
+            gap: 8px;
+            margin: 10px 0 14px;
+            flex-wrap: wrap;
+        }
+        .chips button {
+            border: 1px solid var(--line);
+            background: #f5ece3;
+            color: var(--ink);
+            border-radius: 999px;
+            padding: 7px 12px;
+            cursor: pointer;
+            font-weight: 600;
+        }
+        .chips button.active {
+            background: var(--accent);
+            border-color: var(--accent);
+            color: white;
+        }
+
+        .menu-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 10px;
+        }
+        .card {
+            border: 1px solid var(--line);
+            border-radius: 14px;
+            padding: 12px;
+            background: #fff;
+            display: grid;
+            gap: 8px;
+        }
+        .card h3 { margin: 0; font-size: 0.96rem; }
+        .price {
+            font-family: "IBM Plex Mono", monospace;
+            font-weight: 600;
+            color: var(--accent-2);
+            font-size: 0.92rem;
+        }
+
+        .qty-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+        }
+        .qty-row button {
+            border: 1px solid #c4b7ab;
+            background: #fff7ef;
+            border-radius: 8px;
+            width: 28px;
+            height: 28px;
+            cursor: pointer;
+            font-size: 1rem;
+            line-height: 1;
+        }
+        .qty {
+            min-width: 24px;
+            text-align: center;
+            font-weight: 700;
+        }
+
+        .cart-list {
+            display: grid;
+            gap: 8px;
+            max-height: 320px;
+            overflow: auto;
+            margin: 14px 0;
+            padding-right: 4px;
+        }
+        .cart-line {
+            border: 1px solid var(--line);
+            border-radius: 12px;
+            padding: 10px;
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 6px;
+            background: white;
+        }
+        .cart-line small { color: var(--soft-ink); }
+
+        .totals {
+            border-top: 1px dashed #ccbdae;
+            padding-top: 12px;
+            display: grid;
+            gap: 8px;
+        }
+        .totals strong {
+            font-family: "IBM Plex Mono", monospace;
+            font-size: 1.25rem;
+        }
+
+        .actions {
+            display: grid;
+            gap: 8px;
+            margin-top: 12px;
+        }
+        button.primary, button.secondary, button.warn {
+            border: none;
+            border-radius: 10px;
+            padding: 12px;
+            font-weight: 700;
+            cursor: pointer;
+        }
+        button.primary { background: var(--accent); color: white; }
+        button.secondary { background: #e8ddd2; color: var(--ink); }
+        button.warn { background: #fee2e2; color: var(--danger); }
+        button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        .kpis {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 10px;
+            margin-bottom: 12px;
+        }
+        .kpi {
+            border: 1px solid var(--line);
+            border-radius: 12px;
+            background: #fff;
+            padding: 10px;
+        }
+        .kpi .label { color: var(--soft-ink); font-size: 0.8rem; }
+        .kpi .value {
+            margin-top: 4px;
+            font-family: "IBM Plex Mono", monospace;
+            font-size: 1.05rem;
+            font-weight: 600;
+        }
+
+        .feed {
+            border: 1px solid var(--line);
+            border-radius: 12px;
+            background: #fff;
+            max-height: 320px;
+            overflow: auto;
+            padding: 8px;
+        }
+        .feed-line {
+            border-bottom: 1px solid #efe3d7;
+            padding: 9px 6px;
+            font-size: 0.9rem;
+        }
+        .feed-line:last-child { border-bottom: none; }
+        .ok { color: var(--ok); }
+        .bad { color: var(--danger); }
+        .mono { font-family: "IBM Plex Mono", monospace; }
+
+        .form-grid {
+            display: grid;
+            gap: 10px;
+        }
+        .menu-form-grid {
+            display: grid;
+            grid-template-columns: 1.2fr 1fr 0.8fr auto;
+            gap: 8px;
+            align-items: center;
+        }
+        .menu-list {
+            margin-top: 12px;
+            border: 1px solid var(--line);
+            border-radius: 12px;
+            background: #fff;
+            max-height: 270px;
+            overflow: auto;
+        }
+        .menu-row {
+            display: grid;
+            grid-template-columns: 1.3fr 1fr auto auto;
+            gap: 8px;
+            align-items: center;
+            padding: 10px;
+            border-bottom: 1px solid #efe3d7;
+            font-size: 0.9rem;
+        }
+        .menu-row:last-child { border-bottom: none; }
+        .mini-btn {
+            border: 1px solid #d4c5b7;
+            border-radius: 8px;
+            background: #faf3eb;
+            padding: 6px 8px;
+            cursor: pointer;
+            font-weight: 700;
+        }
+        .mini-btn.danger {
+            background: #fee2e2;
+            color: var(--danger);
+            border-color: #fecaca;
+        }
+        input {
+            width: 100%;
+            border: 1px solid #cdbfae;
+            border-radius: 10px;
+            padding: 11px;
+            font-size: 0.95rem;
+            background: #fff;
+        }
+
+        .overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(25, 24, 22, 0.42);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            padding: 18px;
+        }
+        .overlay.active { display: flex; }
+        .dialog {
+            width: min(420px, 100%);
+            border-radius: 18px;
+            background: white;
+            border: 1px solid var(--line);
+            box-shadow: var(--shadow);
+            padding: 20px;
+            animation: pop 180ms ease-out;
+        }
+        .dialog h3 { margin: 0 0 6px; }
+        .dialog p { margin: 0; color: var(--soft-ink); }
+        @keyframes pop {
+            from { transform: scale(0.96); opacity: 0; }
+            to { transform: scale(1); opacity: 1; }
+        }
+
+        @media (max-width: 1024px) {
+            .shell { grid-template-columns: 1fr; }
+            #pos-view, #admin-view { grid-template-columns: 1fr; }
+            .hero { position: static; }
+            .menu-form-grid, .menu-row { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <main class="shell">
+        <section class="hero panel">
+            <div>
+                <h1>Rukundo POS Command Center</h1>
+                <p>Live RFID checkout and card credit operations</p>
+            </div>
+            <div class="switch">
+                <button id="tab-pos" class="active" onclick="showView('pos')">POS</button>
+                <button id="tab-admin" onclick="showView('admin')">Admin</button>
+            </div>
+        </section>
+
+        <section id="pos-view" class="workspace active">
+            <article class="catalog panel">
+                <div class="head-row">
+                    <div>
+                        <h2>Menu Catalog</h2>
+                        <div class="muted">Tap items, set quantity, then request RFID payment.</div>
+                    </div>
+                </div>
+                <div id="category-chips" class="chips"></div>
+                <div id="menu-grid" class="menu-grid"></div>
+                <div id="menu-empty-help" class="actions" style="display:none; margin-top: 10px;">
+                    <button class="primary" onclick="loadStarterMenu()">Load Starter Menu</button>
+                </div>
+            </article>
+
+            <aside class="cart panel">
+                <div class="head-row">
+                    <div>
+                        <h2>Current Cart</h2>
+                        <div class="muted">Server validates totals before charging.</div>
+                    </div>
+                </div>
+                <div id="cart-list" class="cart-list"></div>
+                <div class="totals">
+                    <span class="muted">Total</span>
+                    <strong id="cart-total">0 RWF</strong>
+                </div>
+                <div class="actions">
+                    <button id="checkout-btn" class="primary" onclick="startCheckout()">Request Card Tap</button>
+                    <button class="secondary" onclick="refreshSummary()">Refresh Stats</button>
+                    <button class="warn" onclick="clearCart()">Clear Cart</button>
+                </div>
+            </aside>
+        </section>
+
+        <section id="admin-view" class="workspace">
+            <article class="admin-form panel">
+                <div class="head-row">
+                    <div>
+                        <h2>Card Credit</h2>
+                        <div class="muted">Issue top-up command to the RFID node.</div>
+                    </div>
+                </div>
+                <div class="form-grid">
+                    <input id="admin-uid" type="text" placeholder="Card UID">
+                    <input id="admin-amount" type="number" min="1" step="1" placeholder="Amount (RWF)">
+                    <button class="primary" onclick="sendTopup()">Send Top-up</button>
+                </div>
+            </article>
+
+            <article class="admin-monitor panel">
+                <div class="head-row">
+                    <div>
+                        <h2>Live Summary</h2>
+                        <div id="live-status" class="muted">Waiting for events...</div>
+                    </div>
+                </div>
+                <div class="kpis">
+                    <div class="kpi">
+                        <div class="label">Known cards</div>
+                        <div id="kpi-cards" class="value">0</div>
+                    </div>
+                    <div class="kpi">
+                        <div class="label">Revenue</div>
+                        <div id="kpi-revenue" class="value">0 RWF</div>
+                    </div>
+                    <div class="kpi">
+                        <div class="label">Top-ups</div>
+                        <div id="kpi-topups" class="value">0 RWF</div>
+                    </div>
+                </div>
+                <div id="event-feed" class="feed"></div>
+            </article>
+
+            <article class="menu-admin panel" style="grid-column: 1 / -1;">
+                <div class="head-row">
+                    <div>
+                        <h2>Manage Menu Items</h2>
+                        <div class="muted">Create, edit, or delete items without changing code.</div>
+                    </div>
+                </div>
+                <div class="menu-form-grid">
+                    <input id="menu-name" type="text" placeholder="Item name">
+                    <input id="menu-category" type="text" placeholder="Category">
+                    <input id="menu-price" type="number" min="1" step="1" placeholder="Price (RWF)">
+                    <button id="menu-save-btn" class="primary" onclick="saveMenuItem()">Add Item</button>
+                </div>
+                <div class="actions" style="grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 8px;">
+                    <button class="secondary" onclick="resetMenuForm()">Reset Form</button>
+                    <button class="secondary" onclick="refreshMenu()">Refresh Menu</button>
+                </div>
+                <div class="actions" style="margin-top: 8px;">
+                    <button class="primary" onclick="loadStarterMenu()">Load Starter Menu (Simple)</button>
+                </div>
+                <div id="menu-list" class="menu-list"></div>
+            </article>
+        </section>
+    </main>
+
+    <section id="overlay" class="overlay">
+        <div class="dialog">
+            <h3>Awaiting Card Tap</h3>
+            <p id="overlay-text">Hold a card near the reader to process this checkout.</p>
+            <div class="actions" style="margin-top: 16px;">
+                <button class="secondary" onclick="closeOverlay()">Close</button>
+            </div>
+        </div>
+    </section>
+
+    <script>
+        const API_BASE = window.location.port === "6000" ? "" : "http://127.0.0.1:6000";
+        const socket = io(API_BASE || undefined);
+
+        let menu = [];
+        let summary = null;
+        let cart = {};
+        let activeCategory = "All";
+        let pendingSessionId = null;
+        let editingMenuItemId = null;
+
+        const menuGrid = document.getElementById("menu-grid");
+        const chipsWrap = document.getElementById("category-chips");
+        const cartList = document.getElementById("cart-list");
+        const cartTotal = document.getElementById("cart-total");
+        const checkoutBtn = document.getElementById("checkout-btn");
+        const overlay = document.getElementById("overlay");
+        const overlayText = document.getElementById("overlay-text");
+        const eventFeed = document.getElementById("event-feed");
+        const menuList = document.getElementById("menu-list");
+        const menuEmptyHelp = document.getElementById("menu-empty-help");
+
+        async function apiFetch(path, options) {
+            const res = await fetch(`${API_BASE}${path}`, options);
+            let payload = {};
+            try {
+                payload = await res.json();
+            } catch (_) {
+                payload = {};
+            }
+            return { res, payload };
+        }
+
+        function showView(view) {
+            document.querySelectorAll(".workspace").forEach(el => el.classList.remove("active"));
+            document.getElementById(view === "pos" ? "pos-view" : "admin-view").classList.add("active");
+            document.getElementById("tab-pos").classList.toggle("active", view === "pos");
+            document.getElementById("tab-admin").classList.toggle("active", view === "admin");
+        }
+
+        function formatRwf(value) {
+            return `${Number(value || 0).toLocaleString()} RWF`;
+        }
+
+        function addFeedLine(html) {
+            const row = document.createElement("div");
+            row.className = "feed-line";
+            row.innerHTML = html;
+            eventFeed.prepend(row);
+        }
+
+        function categoriesFromMenu() {
+            return ["All", ...Array.from(new Set(menu.map(i => i.category)))];
+        }
+
+        function renderCategoryChips() {
+            const cats = categoriesFromMenu();
+            chipsWrap.innerHTML = cats.map(cat => `
+                <button class="${cat === activeCategory ? "active" : ""}" onclick="setCategory('${cat}')">${cat}</button>
+            `).join("");
+        }
+
+        function setCategory(cat) {
+            activeCategory = cat;
+            renderCategoryChips();
+            renderMenu();
+        }
+
+        function renderMenu() {
+            const visible = menu.filter(item => activeCategory === "All" || item.category === activeCategory);
+            if (!visible.length) {
+                menuGrid.innerHTML = `<div class="muted">No items found.</div>`;
+                menuEmptyHelp.style.display = "grid";
+                return;
+            }
+            menuEmptyHelp.style.display = "none";
+
+            menuGrid.innerHTML = visible.map(item => {
+                const qty = cart[item.id] || 0;
+                return `
+                    <article class="card">
+                        <h3>${item.name}</h3>
+                        <div class="muted">${item.category}</div>
+                        <div class="price">${formatRwf(item.price)}</div>
+                        <div class="qty-row">
+                            <button onclick="updateQty('${item.id}', -1)">-</button>
+                            <div class="qty">${qty}</div>
+                            <button onclick="updateQty('${item.id}', 1)">+</button>
+                        </div>
+                    </article>
+                `;
+            }).join("");
+        }
+
+        function renderMenuAdminList() {
+            if (!menu.length) {
+                menuList.innerHTML = `<div class="menu-row muted">No menu items configured.</div>`;
+                return;
+            }
+            menuList.innerHTML = menu.map(item => `
+                <div class="menu-row">
+                    <div><strong>${item.name}</strong><br><span class="muted mono">${item.id}</span></div>
+                    <div>${item.category}</div>
+                    <div class="mono">${formatRwf(item.price)}</div>
+                    <div>
+                        <button class="mini-btn" onclick="startEditMenuItem('${item.id}')">Edit</button>
+                        <button class="mini-btn danger" onclick="deleteMenuItem('${item.id}')">Delete</button>
+                    </div>
+                </div>
+            `).join("");
+        }
+
+        function updateQty(itemId, delta) {
+            const next = Math.max(0, (cart[itemId] || 0) + delta);
+            if (next === 0) {
+                delete cart[itemId];
+            } else {
+                cart[itemId] = next;
+            }
+            renderMenu();
+            renderCart();
+        }
+
+        function cartLines() {
+            return Object.entries(cart)
+                .map(([id, qty]) => {
+                    const item = menu.find(m => m.id === id);
+                    if (!item) return null;
+                    return {
+                        id: item.id,
+                        name: item.name,
+                        qty,
+                        unit_price: item.price,
+                        line_total: item.price * qty
+                    };
+                })
+                .filter(Boolean);
+        }
+
+        function renderCart() {
+            const lines = cartLines();
+            const total = lines.reduce((sum, line) => sum + line.line_total, 0);
+            cartTotal.textContent = formatRwf(total);
+
+            if (!lines.length) {
+                cartList.innerHTML = `<div class="muted">Cart is empty.</div>`;
+                checkoutBtn.disabled = true;
+                return;
+            }
+
+            checkoutBtn.disabled = false;
+            cartList.innerHTML = lines.map(line => `
+                <div class="cart-line">
+                    <div>
+                        <strong>${line.name}</strong><br>
+                        <small>${line.qty} x ${formatRwf(line.unit_price)}</small>
+                    </div>
+                    <div class="mono">${formatRwf(line.line_total)}</div>
+                </div>
+            `).join("");
+        }
+
+        function clearCart() {
+            cart = {};
+            renderMenu();
+            renderCart();
+        }
+
+        function pruneCartForMenu() {
+            const validIds = new Set(menu.map(item => item.id));
+            Object.keys(cart).forEach(itemId => {
+                if (!validIds.has(itemId)) delete cart[itemId];
+            });
+        }
+
+        function openOverlay(text) {
+            overlayText.textContent = text;
+            overlay.classList.add("active");
+        }
+
+        function closeOverlay() {
+            overlay.classList.remove("active");
+        }
+
+        async function loadBootstrap() {
+            const { res, payload } = await apiFetch("/api/bootstrap");
+            if (!res.ok) {
+                throw new Error(payload.message || `Bootstrap failed (${res.status})`);
+            }
+            menu = payload.menu || [];
+            summary = payload.summary || {};
+            renderCategoryChips();
+            if (!categoriesFromMenu().includes(activeCategory)) {
+                activeCategory = "All";
+                renderCategoryChips();
+            }
+            pruneCartForMenu();
+            renderMenu();
+            renderCart();
+            paintSummary();
+            paintFeedFromSummary();
+            renderMenuAdminList();
+        }
+
+        async function refreshSummary() {
+            const { res, payload } = await apiFetch("/api/summary");
+            if (!res.ok) return;
+            summary = payload;
+            paintSummary();
+        }
+
+        async function refreshMenu() {
+            const { res, payload } = await apiFetch("/api/menu");
+            if (!res.ok) return;
+            menu = payload.menu || [];
+            if (!categoriesFromMenu().includes(activeCategory)) activeCategory = "All";
+            renderCategoryChips();
+            pruneCartForMenu();
+            renderMenu();
+            renderCart();
+            renderMenuAdminList();
+        }
+
+        async function loadStarterMenu() {
+            const { res, payload } = await apiFetch("/api/menu/reset", { method: "POST" });
+            if (!res.ok) {
+                alert(payload.message || "Unable to load starter menu.");
+                return;
+            }
+            addFeedLine(`<span class="ok">menu_reset</span> | loaded ${payload.count} starter items`);
+            await refreshMenu();
+            alert("Starter menu loaded. You can now add items to cart.");
+        }
+
+        function paintSummary() {
+            document.getElementById("kpi-cards").textContent = summary.total_cards || 0;
+            document.getElementById("kpi-revenue").textContent = formatRwf(summary.total_revenue || 0);
+            document.getElementById("kpi-topups").textContent = formatRwf(summary.total_topups || 0);
+        }
+
+        function paintFeedFromSummary() {
+            if (!summary || !summary.recent_transactions) return;
+            eventFeed.innerHTML = "";
+            summary.recent_transactions.forEach(row => {
+                const cls = row.type === "checkout" ? "ok" : "";
+                addFeedLine(`<span class="${cls}">${row.type}</span> | <span class="mono">${row.uid || "n/a"}</span> | ${formatRwf(row.amount)}`);
+            });
+            if (!summary.recent_transactions.length) {
+                eventFeed.innerHTML = `<div class="feed-line muted">No events yet.</div>`;
+            }
+        }
+
+        async function startCheckout() {
+            const items = cartLines().map(line => ({ id: line.id, qty: line.qty }));
+            if (!items.length) return;
+
+            const { res, payload } = await apiFetch("/api/checkout", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ items })
+            });
+
+            if (!res.ok) {
+                alert(payload.message || "Checkout failed.");
+                return;
+            }
+
+            pendingSessionId = payload.session_id;
+            openOverlay(`Waiting for card tap. Total: ${formatRwf(payload.total)}`);
+            addFeedLine(`checkout_requested | total ${formatRwf(payload.total)}`);
+        }
+
+        async function sendTopup() {
+            const uid = document.getElementById("admin-uid").value.trim();
+            const amount = Number(document.getElementById("admin-amount").value);
+            if (!uid || !amount || amount <= 0) {
+                alert("Provide valid UID and amount.");
+                return;
+            }
+
+            const { res, payload } = await apiFetch("/api/topup", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ uid, amount })
+            });
+
+            if (!res.ok) {
+                alert(payload.message || "Top-up failed.");
+                return;
+            }
+
+            document.getElementById("admin-amount").value = "";
+            addFeedLine(`<span class="ok">topup_sent</span> | <span class="mono">${uid}</span> | ${formatRwf(amount)}`);
+            refreshSummary();
+        }
+
+        function resetMenuForm() {
+            editingMenuItemId = null;
+            document.getElementById("menu-name").value = "";
+            document.getElementById("menu-category").value = "";
+            document.getElementById("menu-price").value = "";
+            document.getElementById("menu-save-btn").textContent = "Add Item";
+        }
+
+        function startEditMenuItem(itemId) {
+            const item = menu.find(i => i.id === itemId);
+            if (!item) return;
+            editingMenuItemId = itemId;
+            document.getElementById("menu-name").value = item.name;
+            document.getElementById("menu-category").value = item.category;
+            document.getElementById("menu-price").value = item.price;
+            document.getElementById("menu-save-btn").textContent = "Update Item";
+        }
+
+        async function saveMenuItem() {
+            const name = document.getElementById("menu-name").value.trim();
+            const category = document.getElementById("menu-category").value.trim();
+            const price = Number(document.getElementById("menu-price").value);
+
+            if (!name || !category || !price || price <= 0) {
+                alert("Provide valid name, category, and price.");
+                return;
+            }
+
+            const isEdit = Boolean(editingMenuItemId);
+            const endpoint = isEdit ? `/api/menu/${editingMenuItemId}` : "/api/menu";
+            const method = isEdit ? "PUT" : "POST";
+
+            const { res, payload } = await apiFetch(endpoint, {
+                method,
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ name, category, price })
+            });
+            if (!res.ok) {
+                alert(payload.message || "Unable to save item.");
+                return;
+            }
+
+            addFeedLine(`<span class="ok">menu_${isEdit ? "updated" : "created"}</span> | ${name} | ${formatRwf(price)}`);
+            resetMenuForm();
+            await refreshMenu();
+        }
+
+        async function deleteMenuItem(itemId) {
+            if (!confirm("Delete this menu item?")) return;
+
+            const { res, payload } = await apiFetch(`/api/menu/${itemId}`, { method: "DELETE" });
+            if (!res.ok) {
+                alert(payload.message || "Unable to delete item.");
+                return;
+            }
+
+            addFeedLine(`<span class="bad">menu_deleted</span> | <span class="mono">${payload.id}</span>`);
+            if (editingMenuItemId === itemId) resetMenuForm();
+            await refreshMenu();
+        }
+
+        socket.on("card_tapped", (data) => {
+            document.getElementById("admin-uid").value = data.uid || "";
+            document.getElementById("live-status").textContent = `Card seen: ${data.uid} with ${formatRwf(data.balance)}`;
+            addFeedLine(`card_tapped | <span class="mono">${data.uid}</span> | bal ${formatRwf(data.balance)}`);
+        });
+
+        socket.on("checkout_result", (data) => {
+            if (pendingSessionId && data.session_id !== pendingSessionId) return;
+
+            closeOverlay();
+            if (data.status === "success") {
+                addFeedLine(`<span class="ok">checkout_success</span> | <span class="mono">${data.uid}</span> | charged ${formatRwf(data.charged)}`);
+                clearCart();
+                alert(`Payment successful. New balance: ${formatRwf(data.new_balance)}`);
+            } else {
+                addFeedLine(`<span class="bad">checkout_failed</span> | <span class="mono">${data.uid}</span> | needed ${formatRwf(data.needed)}`);
+                alert(`Insufficient funds. Balance ${formatRwf(data.balance)} / needed ${formatRwf(data.needed)}`);
+            }
+
+            pendingSessionId = null;
+            refreshSummary();
+        });
+
+        socket.on("topup_sent", (data) => {
+            addFeedLine(`<span class="ok">topup_command</span> | <span class="mono">${data.uid}</span> | ${formatRwf(data.amount)}`);
+        });
+
+        loadBootstrap().catch((err) => {
+            const msg = `Unable to load dashboard data. Start server and open http://127.0.0.1:6000/ (error: ${err.message || "network"}).`;
+            document.getElementById("live-status").textContent = msg;
+            alert(msg);
+        });
+    </script>
+</body>
+</html>
