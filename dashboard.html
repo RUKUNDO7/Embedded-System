@@ -3,8 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Rukundo POS Command Center</title>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <title>Rk POS Command Center</title>
+    <script src="/socket.io/socket.io.js"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
@@ -67,6 +67,15 @@
 
         .hero h1 { margin: 0; font-size: 1.55rem; }
         .hero p { margin: 4px 0 0; color: var(--soft-ink); }
+        .hero-right {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .auth-user {
+            color: var(--soft-ink);
+            font-size: 0.9rem;
+        }
 
         .switch {
             display: inline-flex;
@@ -261,6 +270,48 @@
         .ok { color: var(--ok); }
         .bad { color: var(--danger); }
         .mono { font-family: "IBM Plex Mono", monospace; }
+        .note {
+            background: #fff7ed;
+            border: 1px solid #fed7aa;
+            color: #9a3412;
+            border-radius: 10px;
+            padding: 10px;
+            font-size: 0.9rem;
+        }
+        .split-cols {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 10px;
+        }
+        .mini-feed {
+            border: 1px solid var(--line);
+            border-radius: 10px;
+            background: #fff;
+            max-height: 220px;
+            overflow: auto;
+        }
+        .mini-feed .feed-line {
+            font-size: 0.84rem;
+            padding: 8px;
+        }
+        .receipt-box {
+            margin-top: 12px;
+            border: 1px dashed #cdbfae;
+            border-radius: 12px;
+            background: #fff;
+            padding: 10px;
+            display: none;
+        }
+        .receipt-box.active { display: block; }
+        .receipt-line {
+            display: flex;
+            justify-content: space-between;
+            gap: 8px;
+            font-size: 0.88rem;
+            padding: 4px 0;
+            border-bottom: 1px solid #f0e5da;
+        }
+        .receipt-line:last-child { border-bottom: none; }
 
         .form-grid {
             display: grid;
@@ -303,7 +354,7 @@
             color: var(--danger);
             border-color: #fecaca;
         }
-        input {
+        input, select {
             width: 100%;
             border: 1px solid #cdbfae;
             border-radius: 10px;
@@ -338,29 +389,118 @@
             to { transform: scale(1); opacity: 1; }
         }
 
+        .auth-gate {
+            grid-column: 1 / -1;
+            padding: 20px;
+            display: none;
+            gap: 14px;
+        }
+        .auth-switch {
+            display: inline-flex;
+            background: #efe4d9;
+            border-radius: 999px;
+            padding: 4px;
+            border: 1px solid #ddcdbf;
+            width: fit-content;
+            gap: 4px;
+        }
+        .auth-switch button {
+            border: none;
+            background: transparent;
+            padding: 9px 12px;
+            border-radius: 999px;
+            font-weight: 700;
+            cursor: pointer;
+            color: var(--soft-ink);
+        }
+        .auth-switch button.active {
+            background: #fff;
+            color: var(--ink);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+        }
+        .auth-card {
+            border: 1px solid var(--line);
+            border-radius: 12px;
+            background: #fff;
+            padding: 14px;
+            display: grid;
+            gap: 8px;
+            max-width: 520px;
+        }
+        .auth-panel {
+            display: none;
+        }
+        .auth-panel.active {
+            display: block;
+        }
+        .auth-error {
+            color: var(--danger);
+            font-size: 0.9rem;
+            min-height: 20px;
+        }
+        body.logged-out .switch { display: none; }
+        body.logged-out .workspace { display: none !important; }
+        body.logged-out #auth-gate { display: grid; }
+        body.logged-in #auth-gate { display: none; }
+
         @media (max-width: 1024px) {
             .shell { grid-template-columns: 1fr; }
             #pos-view, #admin-view { grid-template-columns: 1fr; }
             .hero { position: static; }
             .menu-form-grid, .menu-row { grid-template-columns: 1fr; }
+            .split-cols { grid-template-columns: 1fr; }
         }
     </style>
 </head>
-<body>
+<body class="logged-out">
     <main class="shell">
         <section class="hero panel">
             <div>
-                <h1>Rukundo POS Command Center</h1>
+                <h1>Rk POS Command Center</h1>
                 <p>Live RFID checkout and card credit operations</p>
             </div>
-            <div class="switch">
-                <button id="tab-pos" class="active" onclick="showView('pos')">POS</button>
-                <button id="tab-admin" onclick="showView('admin')">Admin</button>
+            <div class="hero-right">
+                <div id="auth-user" class="auth-user">Not signed in</div>
+                <button id="logout-btn" class="secondary" style="display:none;" onclick="logout()">Logout</button>
+            </div>
+        </section>
+
+        <section id="auth-gate" class="auth-gate panel">
+            <div>
+                <h2 style="margin:0;">Sign up or log in</h2>
+                <div class="muted">Authentication is required before using POS and admin actions.</div>
+            </div>
+            <div class="auth-switch">
+                <button id="auth-tab-login" class="active" onclick="showAuthSection('login')">Login</button>
+                <button id="auth-tab-signup" onclick="showAuthSection('signup')">Sign Up</button>
+            </div>
+            <div id="auth-error" class="auth-error"></div>
+            <div id="auth-panel-login" class="auth-panel active">
+                <article class="auth-card">
+                    <h3 style="margin:0;">Login</h3>
+                    <input id="login-username" type="text" placeholder="Username">
+                    <input id="login-password" type="password" placeholder="Password">
+                    <button class="primary" onclick="login()">Login</button>
+                </article>
+            </div>
+            <div id="auth-panel-signup" class="auth-panel">
+                <article class="auth-card">
+                    <h3 style="margin:0;">Sign Up</h3>
+                    <input id="signup-username" type="text" placeholder="Username">
+                    <select id="signup-role">
+                        <option value="salesperson">Salesperson</option>
+                        <option value="agent">Agent</option>
+                        <option value="admin">Admin</option>
+                    </select>
+                    <input id="signup-password" type="password" placeholder="Password (min 6 chars)">
+                    <input id="signup-confirm-password" type="password" placeholder="Confirm password">
+                    <button class="primary" onclick="signup()">Create Account</button>
+                </article>
             </div>
         </section>
 
         <section id="pos-view" class="workspace active">
-            <article class="catalog panel">
+            <article id="catalog-panel" class="catalog panel">
                 <div class="head-row">
                     <div>
                         <h2>Menu Catalog</h2>
@@ -374,7 +514,7 @@
                 </div>
             </article>
 
-            <aside class="cart panel">
+            <aside id="cart-panel" class="cart panel">
                 <div class="head-row">
                     <div>
                         <h2>Current Cart</h2>
@@ -391,17 +531,23 @@
                     <button class="secondary" onclick="refreshSummary()">Refresh Stats</button>
                     <button class="warn" onclick="clearCart()">Clear Cart</button>
                 </div>
+                <div id="receipt-box" class="receipt-box">
+                    <strong>Latest Receipt</strong>
+                    <div id="receipt-meta" class="muted" style="margin-top:4px;"></div>
+                    <div id="receipt-items" style="margin-top:8px;"></div>
+                </div>
             </aside>
         </section>
 
         <section id="admin-view" class="workspace">
-            <article class="admin-form panel">
+            <article id="admin-form-panel" class="admin-form panel">
                 <div class="head-row">
                     <div>
                         <h2>Card Credit</h2>
-                        <div class="muted">Issue top-up command to the RFID node.</div>
+                        <div class="muted">Agent/Admin can issue top-up command to the RFID node.</div>
                     </div>
                 </div>
+                <div id="topup-role-note" class="note" style="display:none;">Only Agent/Admin accounts can send wallet top-ups.</div>
                 <div class="form-grid">
                     <input id="admin-uid" type="text" placeholder="Card UID">
                     <input id="admin-amount" type="number" min="1" step="1" placeholder="Amount (RWF)">
@@ -409,7 +555,7 @@
                 </div>
             </article>
 
-            <article class="admin-monitor panel">
+            <article id="admin-monitor-panel" class="admin-monitor panel">
                 <div class="head-row">
                     <div>
                         <h2>Live Summary</h2>
@@ -433,7 +579,30 @@
                 <div id="event-feed" class="feed"></div>
             </article>
 
-            <article class="menu-admin panel" style="grid-column: 1 / -1;">
+            <article id="consolidated-panel" class="panel" style="grid-column: 1 / -1; padding: 18px;">
+                <div class="head-row">
+                    <div>
+                        <h2>Consolidated Dashboard</h2>
+                        <div class="muted">Integrated top-ups, transactions, receipts, and card balances.</div>
+                    </div>
+                </div>
+                <div class="split-cols">
+                    <div>
+                        <div class="muted" style="margin-bottom:6px;">Recent Transactions</div>
+                        <div id="transactions-feed" class="mini-feed"></div>
+                    </div>
+                    <div>
+                        <div class="muted" style="margin-bottom:6px;">Recent Card Balances</div>
+                        <div id="balances-feed" class="mini-feed"></div>
+                    </div>
+                    <div>
+                        <div class="muted" style="margin-bottom:6px;">Recent Receipts</div>
+                        <div id="receipts-feed" class="mini-feed"></div>
+                    </div>
+                </div>
+            </article>
+
+            <article id="menu-admin-panel" class="menu-admin panel" style="grid-column: 1 / -1;">
                 <div class="head-row">
                     <div>
                         <h2>Manage Menu Items</h2>
@@ -469,8 +638,29 @@
     </section>
 
     <script>
-        const API_BASE = window.location.port === "6000" ? "" : "http://127.0.0.1:6000";
-        const socket = io(API_BASE || undefined);
+        const APP_ORIGIN = "http://127.0.0.9215";
+        if (!(window.location.hostname === "127.0.0.1" || window.location.hostname === "localhost") || window.location.port !== "9215") {
+            window.location.replace(`${APP_ORIGIN}/`);
+        }
+
+        let API_BASE = window.location.port === "9215" ? "" : "";
+        const socket = (typeof io !== "undefined")
+            ? io(API_BASE || undefined)
+            : { on: () => {} };
+        const TOKEN_KEY = "rk_auth_token";
+
+        function backendCandidates() {
+            const host = window.location.hostname || "127.0.0.1";
+            const list = [];
+            if (window.location.port === "9215") {
+                list.push("");
+            } else {
+            list.push(`http://${host}:9215`);
+            if (host !== "localhost") list.push("http://localhost:9215");
+            if (host !== "127.0.0.1") list.push("http://127.0.0.1:9215");
+            }
+            return Array.from(new Set(list));
+        }
 
         let menu = [];
         let summary = null;
@@ -478,6 +668,8 @@
         let activeCategory = "All";
         let pendingSessionId = null;
         let editingMenuItemId = null;
+        let authToken = localStorage.getItem(TOKEN_KEY) || "";
+        let currentUser = null;
 
         const menuGrid = document.getElementById("menu-grid");
         const chipsWrap = document.getElementById("category-chips");
@@ -489,23 +681,245 @@
         const eventFeed = document.getElementById("event-feed");
         const menuList = document.getElementById("menu-list");
         const menuEmptyHelp = document.getElementById("menu-empty-help");
+        const authError = document.getElementById("auth-error");
+        const authUser = document.getElementById("auth-user");
+        const logoutBtn = document.getElementById("logout-btn");
+        const authPanelLogin = document.getElementById("auth-panel-login");
+        const authPanelSignup = document.getElementById("auth-panel-signup");
+        const authTabLogin = document.getElementById("auth-tab-login");
+        const authTabSignup = document.getElementById("auth-tab-signup");
+        const posView = document.getElementById("pos-view");
+        const adminView = document.getElementById("admin-view");
+        const catalogPanel = document.getElementById("catalog-panel");
+        const cartPanel = document.getElementById("cart-panel");
+        const adminFormPanel = document.getElementById("admin-form-panel");
+        const adminMonitorPanel = document.getElementById("admin-monitor-panel");
+        const consolidatedPanel = document.getElementById("consolidated-panel");
+        const menuAdminPanel = document.getElementById("menu-admin-panel");
+        const transactionsFeed = document.getElementById("transactions-feed");
+        const balancesFeed = document.getElementById("balances-feed");
+        const receiptsFeed = document.getElementById("receipts-feed");
+        const receiptBox = document.getElementById("receipt-box");
+        const receiptMeta = document.getElementById("receipt-meta");
+        const receiptItems = document.getElementById("receipt-items");
+        const topupRoleNote = document.getElementById("topup-role-note");
+        const adminTopupButton = document.querySelector(".admin-form .primary");
+        const ROLE_POLICY = {
+            agent: {
+                tabs: { pos: false, admin: true },
+                sections: { catalog: false, cart: false, adminForm: true, adminMonitor: true, consolidated: true, menuAdmin: false },
+            },
+            salesperson: {
+                tabs: { pos: true, admin: false },
+                sections: { catalog: true, cart: true, adminForm: false, adminMonitor: false, consolidated: false, menuAdmin: false },
+            },
+            admin: {
+                tabs: { pos: true, admin: true },
+                sections: { catalog: true, cart: true, adminForm: true, adminMonitor: true, consolidated: true, menuAdmin: true },
+            },
+        };
 
-        async function apiFetch(path, options) {
-            const res = await fetch(`${API_BASE}${path}`, options);
+        function setAuthState(user, token) {
+            currentUser = user || null;
+            authToken = token || "";
+            if (authToken) {
+                localStorage.setItem(TOKEN_KEY, authToken);
+            } else {
+                localStorage.removeItem(TOKEN_KEY);
+            }
+            document.body.classList.toggle("logged-in", Boolean(authToken));
+            document.body.classList.toggle("logged-out", !authToken);
+            authUser.textContent = currentUser ? `Signed in as ${currentUser.username} (${currentUser.role})` : "Not signed in";
+            logoutBtn.style.display = authToken ? "inline-block" : "none";
+            applyRoleAccess();
+        }
+
+        function hasRole(...roles) {
+            if (!currentUser) return false;
+            return roles.includes(currentUser.role);
+        }
+
+        function applyRoleAccess() {
+            const canTopup = hasRole("agent", "admin");
+            const canCheckout = hasRole("salesperson", "admin");
+            const role = currentUser ? currentUser.role : "";
+            const policy = ROLE_POLICY[role] || {
+                tabs: { pos: false, admin: false },
+                sections: { catalog: false, cart: false, adminForm: false, adminMonitor: false, consolidated: false, menuAdmin: false },
+            };
+
+            posView.style.display = policy.tabs.pos ? "" : "none";
+            adminView.style.display = policy.tabs.admin ? "" : "none";
+            catalogPanel.style.display = policy.sections.catalog ? "" : "none";
+            cartPanel.style.display = policy.sections.cart ? "" : "none";
+            adminFormPanel.style.display = policy.sections.adminForm ? "" : "none";
+            adminMonitorPanel.style.display = policy.sections.adminMonitor ? "" : "none";
+            consolidatedPanel.style.display = policy.sections.consolidated ? "" : "none";
+            menuAdminPanel.style.display = policy.sections.menuAdmin ? "" : "none";
+
+            document.querySelectorAll(".workspace").forEach(el => el.classList.remove("active"));
+            if (policy.tabs.pos) posView.classList.add("active");
+            if (policy.tabs.admin) adminView.classList.add("active");
+
+            adminTopupButton.disabled = !canTopup;
+            topupRoleNote.style.display = canTopup ? "none" : "block";
+            checkoutBtn.disabled = !canCheckout || !cartLines().length;
+
+            if (!canCheckout) {
+                document.getElementById("live-status").textContent = "Login as Salesperson/Admin to run checkout.";
+            }
+
+            if (!currentUser) return;
+            if (!policy.tabs.pos && !policy.tabs.admin) {
+                document.querySelectorAll(".workspace").forEach(el => el.classList.remove("active"));
+                document.getElementById("live-status").textContent = "No dashboard sections assigned for this role.";
+                return;
+            }
+        }
+
+        function showAuthError(message) {
+            authError.textContent = message || "";
+        }
+
+        function showAuthSection(section) {
+            const isLogin = section !== "signup";
+            authPanelLogin.classList.toggle("active", isLogin);
+            authPanelSignup.classList.toggle("active", !isLogin);
+            authTabLogin.classList.toggle("active", isLogin);
+            authTabSignup.classList.toggle("active", !isLogin);
+            showAuthError("");
+        }
+
+        async function apiFetch(path, options = {}) {
+            const headers = new Headers(options.headers || {});
+            if (authToken) {
+                headers.set("Authorization", `Bearer ${authToken}`);
+            }
+            const attempted = [];
+            const bases = API_BASE ? [API_BASE] : backendCandidates();
+            let res = null;
+            for (const base of bases) {
+                const url = `${base}${path}`;
+                attempted.push(url);
+                try {
+                    res = await fetch(url, { ...options, headers });
+                    API_BASE = base;
+                    break;
+                } catch (_) {
+                    // try next candidate
+                }
+            }
+            if (!res) {
+                return {
+                    res: { ok: false, status: 0 },
+                    payload: {
+                    message: `Cannot reach backend server. Tried: ${attempted.join(" | ")}. Start app.py and open http://127.0.0.1:9215/`,
+                    },
+                };
+            }
             let payload = {};
             try {
                 payload = await res.json();
             } catch (_) {
                 payload = {};
             }
+            if (res.status === 401 && !["/api/login", "/api/signup"].includes(path)) {
+                setAuthState(null, "");
+                showAuthError(payload.message || "Session expired. Log in again.");
+            }
             return { res, payload };
         }
 
-        function showView(view) {
-            document.querySelectorAll(".workspace").forEach(el => el.classList.remove("active"));
-            document.getElementById(view === "pos" ? "pos-view" : "admin-view").classList.add("active");
-            document.getElementById("tab-pos").classList.toggle("active", view === "pos");
-            document.getElementById("tab-admin").classList.toggle("active", view === "admin");
+        async function signup() {
+            const username = document.getElementById("signup-username").value.trim();
+            const role = document.getElementById("signup-role").value;
+            const password = document.getElementById("signup-password").value;
+            const confirmPassword = document.getElementById("signup-confirm-password").value;
+            if (!username || !password) {
+                showAuthError("Username and password are required.");
+                return;
+            }
+            if (password !== confirmPassword) {
+                showAuthError("Passwords do not match.");
+                return;
+            }
+
+            const { res, payload } = await apiFetch("/api/signup", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ username, password, role })
+            });
+            if (!res.ok) {
+                showAuthError(payload.message || "Sign up failed.");
+                return;
+            }
+
+            showAuthError("");
+            setAuthState(payload.user, payload.token);
+            await initializeDashboard();
+        }
+
+        async function login() {
+            const username = document.getElementById("login-username").value.trim();
+            const password = document.getElementById("login-password").value;
+            if (!username || !password) {
+                showAuthError("Username and password are required.");
+                return;
+            }
+
+            const { res, payload } = await apiFetch("/api/login", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ username, password })
+            });
+            if (!res.ok) {
+                showAuthError(payload.message || "Login failed.");
+                return;
+            }
+
+            showAuthError("");
+            setAuthState(payload.user, payload.token);
+            await initializeDashboard();
+        }
+
+        async function logout() {
+            if (authToken) {
+                await apiFetch("/api/logout", { method: "POST" });
+            }
+            setAuthState(null, "");
+            showAuthError("Logged out.");
+            renderReceipt(null);
+        }
+
+        async function restoreSession() {
+            if (!authToken) {
+                setAuthState(null, "");
+                showAuthError("Please log in or sign up.");
+                return;
+            }
+
+            const { res, payload } = await apiFetch("/api/me");
+            if (!res.ok) {
+                setAuthState(null, "");
+                showAuthError(payload.message || "Please log in.");
+                return;
+            }
+            setAuthState(payload.user, authToken);
+            await initializeDashboard();
+        }
+
+        async function initializeDashboard() {
+            try {
+                await loadBootstrap();
+                applyRoleAccess();
+                if (typeof io === "undefined") {
+                    document.getElementById("live-status").textContent = "Live socket unavailable; refresh stats manually.";
+                }
+            } catch (err) {
+                const msg = `Unable to load dashboard data. Start server and open http://127.0.0.1:9215/ (error: ${err.message || "network"}).`;
+                document.getElementById("live-status").textContent = msg;
+                alert(msg);
+            }
         }
 
         function formatRwf(value) {
@@ -614,11 +1028,11 @@
 
             if (!lines.length) {
                 cartList.innerHTML = `<div class="muted">Cart is empty.</div>`;
-                checkoutBtn.disabled = true;
+                applyRoleAccess();
                 return;
             }
 
-            checkoutBtn.disabled = false;
+            applyRoleAccess();
             cartList.innerHTML = lines.map(line => `
                 <div class="cart-line">
                     <div>
@@ -669,6 +1083,7 @@
             renderCart();
             paintSummary();
             paintFeedFromSummary();
+            paintConsolidated();
             renderMenuAdminList();
         }
 
@@ -677,6 +1092,7 @@
             if (!res.ok) return;
             summary = payload;
             paintSummary();
+            paintConsolidated();
         }
 
         async function refreshMenu() {
@@ -708,6 +1124,24 @@
             document.getElementById("kpi-topups").textContent = formatRwf(summary.total_topups || 0);
         }
 
+        function paintConsolidated() {
+            const tx = (summary && summary.recent_transactions) || [];
+            const cards = (summary && summary.recent_cards) || [];
+            const receipts = (summary && summary.recent_receipts) || [];
+
+            transactionsFeed.innerHTML = tx.length
+                ? tx.map(row => `<div class="feed-line"><span class="mono">${row.uid || "n/a"}</span> | ${row.type} | ${formatRwf(row.amount)}</div>`).join("")
+                : `<div class="feed-line muted">No transactions yet.</div>`;
+
+            balancesFeed.innerHTML = cards.length
+                ? cards.map(row => `<div class="feed-line"><span class="mono">${row.uid}</span> | bal ${formatRwf(row.balance)}</div>`).join("")
+                : `<div class="feed-line muted">No card balances yet.</div>`;
+
+            receiptsFeed.innerHTML = receipts.length
+                ? receipts.map(row => `<div class="feed-line"><span class="mono">${row.receipt_no}</span> | ${row.salesperson} | ${formatRwf(row.total)}</div>`).join("")
+                : `<div class="feed-line muted">No receipts yet.</div>`;
+        }
+
         function paintFeedFromSummary() {
             if (!summary || !summary.recent_transactions) return;
             eventFeed.innerHTML = "";
@@ -720,7 +1154,30 @@
             }
         }
 
+        function renderReceipt(receipt) {
+            if (!receipt) {
+                receiptBox.classList.remove("active");
+                receiptMeta.textContent = "";
+                receiptItems.innerHTML = "";
+                return;
+            }
+
+            receiptMeta.textContent = `${receipt.receipt_no} | UID ${receipt.uid} | by ${receipt.salesperson} | ${receipt.created_at}`;
+            const lines = (receipt.items || []).map(item => `
+                <div class="receipt-line">
+                    <span>${item.name} x${item.qty}</span>
+                    <span class="mono">${formatRwf(item.line_total)}</span>
+                </div>
+            `).join("");
+            receiptItems.innerHTML = `${lines}<div class="receipt-line"><strong>Total</strong><strong class="mono">${formatRwf(receipt.total)}</strong></div>`;
+            receiptBox.classList.add("active");
+        }
+
         async function startCheckout() {
+            if (!hasRole("salesperson", "admin")) {
+                alert("Only Salesperson/Admin can perform checkout.");
+                return;
+            }
             const items = cartLines().map(line => ({ id: line.id, qty: line.qty }));
             if (!items.length) return;
 
@@ -741,6 +1198,10 @@
         }
 
         async function sendTopup() {
+            if (!hasRole("agent", "admin")) {
+                alert("Only Agent/Admin can send wallet top-up.");
+                return;
+            }
             const uid = document.getElementById("admin-uid").value.trim();
             const amount = Number(document.getElementById("admin-amount").value);
             if (!uid || !amount || amount <= 0) {
@@ -838,6 +1299,7 @@
             if (data.status === "success") {
                 addFeedLine(`<span class="ok">checkout_success</span> | <span class="mono">${data.uid}</span> | charged ${formatRwf(data.charged)}`);
                 clearCart();
+                renderReceipt(data.receipt || null);
                 alert(`Payment successful. New balance: ${formatRwf(data.new_balance)}`);
             } else {
                 addFeedLine(`<span class="bad">checkout_failed</span> | <span class="mono">${data.uid}</span> | needed ${formatRwf(data.needed)}`);
@@ -852,11 +1314,7 @@
             addFeedLine(`<span class="ok">topup_command</span> | <span class="mono">${data.uid}</span> | ${formatRwf(data.amount)}`);
         });
 
-        loadBootstrap().catch((err) => {
-            const msg = `Unable to load dashboard data. Start server and open http://127.0.0.1:6000/ (error: ${err.message || "network"}).`;
-            document.getElementById("live-status").textContent = msg;
-            alert(msg);
-        });
+        restoreSession();
     </script>
 </body>
 </html>
