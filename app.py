@@ -1,12 +1,16 @@
 import json
+import os
 from pathlib import Path
 import re
+import secrets
 import sqlite3
 import uuid
+from functools import wraps
 from threading import Lock
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, g, jsonify, render_template, request
 from flask_socketio import SocketIO
+from werkzeug.security import check_password_hash, generate_password_hash
 
 try:
     import paho.mqtt.client as mqtt
@@ -15,9 +19,10 @@ except ModuleNotFoundError:
 
 app = Flask(__name__, template_folder=".")
 socketio = SocketIO(app, cors_allowed_origins="*")
+app.config["SECRET_KEY"] = os.environ.get("APP_SECRET_KEY", "rk-dev-secret")
 
 BASE_DIR = Path(__file__).resolve().parent
-DB_PATH = str(BASE_DIR / "rukundo.db")
+DB_PATH = str(BASE_DIR / "rk.db")
 
 
 @app.after_request
@@ -42,15 +47,24 @@ DEFAULT_MENU_ITEMS = [
     {"id": "fruit_parfait", "name": "Fruit Parfait", "category": "Dessert", "price": 2000},
     {"id": "choco_brownie", "name": "Chocolate Brownie", "category": "Dessert", "price": 1700},
 ]
+VALID_ROLES = {"agent", "salesperson", "admin"}
 
 # Global state tracking pending checkout and lock for cross-thread safety.
 checkout_lock = Lock()
-checkout_queue = {"active": False, "session_id": None, "amount": 0, "items": []}
+checkout_queue = {
+    "active": False,
+    "session_id": None,
+    "amount": 0,
+    "items": [],
+    "initiated_by": None,
+    "initiated_role": None,
+}
 
 
 def get_conn():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
 
@@ -88,6 +102,44 @@ def init_db():
         )
         """
     )
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+            role TEXT NOT NULL DEFAULT 'salesperson' CHECK (role IN ('agent', 'salesperson', 'admin')),
+            password_hash TEXT NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS auth_tokens (
+            token TEXT PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS receipts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            receipt_no TEXT NOT NULL UNIQUE,
+            uid TEXT NOT NULL,
+            total INTEGER NOT NULL,
+            items_json TEXT NOT NULL,
+            salesperson TEXT NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    cursor.execute("PRAGMA table_info(users)")
+    user_columns = {row["name"] for row in cursor.fetchall()}
+    if "role" not in user_columns:
+        cursor.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'salesperson'")
     cursor.execute("SELECT COUNT(*) AS c FROM menu_items")
     if cursor.fetchone()["c"] == 0:
         cursor.executemany(
@@ -185,6 +237,38 @@ def create_transaction(uid, amount, tx_type):
     conn.close()
 
 
+def create_receipt(uid, total, items, salesperson):
+    receipt_no = f"RCPT-{uuid.uuid4().hex[:10].upper()}"
+    conn = get_conn()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        INSERT INTO receipts (receipt_no, uid, total, items_json, salesperson)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (receipt_no, uid, total, json.dumps(items), salesperson),
+    )
+    conn.commit()
+    cursor.execute(
+        """
+        SELECT receipt_no, uid, total, items_json, salesperson, created_at
+        FROM receipts
+        WHERE receipt_no = ?
+        """,
+        (receipt_no,),
+    )
+    row = cursor.fetchone()
+    conn.close()
+    return {
+        "receipt_no": row["receipt_no"],
+        "uid": row["uid"],
+        "total": row["total"],
+        "items": json.loads(row["items_json"]),
+        "salesperson": row["salesperson"],
+        "created_at": row["created_at"],
+    }
+
+
 def get_summary():
     conn = get_conn()
     cursor = conn.cursor()
@@ -228,6 +312,16 @@ def get_summary():
     )
     recent_transactions = [dict(row) for row in cursor.fetchall()]
 
+    cursor.execute(
+        """
+        SELECT receipt_no, uid, total, salesperson, created_at
+        FROM receipts
+        ORDER BY datetime(created_at) DESC
+        LIMIT 8
+        """
+    )
+    recent_receipts = [dict(row) for row in cursor.fetchall()]
+
     conn.close()
     return {
         "total_cards": total_cards,
@@ -235,6 +329,7 @@ def get_summary():
         "total_topups": total_topups,
         "recent_cards": recent_cards,
         "recent_transactions": recent_transactions,
+        "recent_receipts": recent_receipts,
     }
 
 
@@ -269,11 +364,92 @@ def build_checkout(items):
     return {"items": normalized, "total": total}, None
 
 
+def parse_bearer_token(auth_header):
+    if not auth_header:
+        return ""
+    parts = auth_header.strip().split(" ", 1)
+    if len(parts) != 2 or parts[0].lower() != "bearer":
+        return ""
+    return parts[1].strip()
+
+
+def get_authenticated_user():
+    token = parse_bearer_token(request.headers.get("Authorization", ""))
+    if not token:
+        return None, ""
+
+    conn = get_conn()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT users.id, users.username, users.role
+        FROM auth_tokens
+        JOIN users ON users.id = auth_tokens.user_id
+        WHERE auth_tokens.token = ?
+        """,
+        (token,),
+    )
+    row = cursor.fetchone()
+    conn.close()
+    if not row:
+        return None, ""
+    return {"id": row["id"], "username": row["username"], "role": row["role"]}, token
+
+
+def issue_auth_token(user_id):
+    token = secrets.token_urlsafe(32)
+    conn = get_conn()
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO auth_tokens (token, user_id) VALUES (?, ?)",
+        (token, user_id),
+    )
+    conn.commit()
+    conn.close()
+    return token
+
+
+def auth_required(func):
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        user, token = get_authenticated_user()
+        if not user:
+            return jsonify({"status": "error", "message": "Authentication required."}), 401
+        g.current_user = user
+        g.auth_token = token
+        return func(*args, **kwargs)
+
+    return wrapper
+
+
+def role_required(*roles):
+    allowed = set(roles)
+
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            current = getattr(g, "current_user", None)
+            if not current:
+                return jsonify({"status": "error", "message": "Authentication required."}), 401
+            if current.get("role") not in allowed:
+                return jsonify(
+                    {
+                        "status": "error",
+                        "message": f"Access denied for role '{current.get('role')}'.",
+                    }
+                ), 403
+            return func(*args, **kwargs)
+
+        return wrapper
+
+    return decorator
+
+
 init_db()
 
 # --- MQTT SETUP ---
 MQTT_BROKER = "157.173.101.159"
-TEAM_ID = "team_rukundo_20266"
+TEAM_ID = "team_rk_20266"
 TOPIC_STATUS = f"rfid/{TEAM_ID}/card/status"
 TOPIC_TOPUP = f"rfid/{TEAM_ID}/card/topup"
 TOPIC_BALANCE = f"rfid/{TEAM_ID}/card/balance"
@@ -308,13 +484,23 @@ def on_message(client, userdata, msg):
             return
 
         pending = dict(checkout_queue)
-        checkout_queue = {"active": False, "session_id": None, "amount": 0, "items": []}
+        checkout_queue = {
+            "active": False,
+            "session_id": None,
+            "amount": 0,
+            "items": [],
+            "initiated_by": None,
+            "initiated_role": None,
+        }
 
     if balance >= pending["amount"]:
         deduction = -pending["amount"]
         if mqtt_enabled:
             client.publish(TOPIC_TOPUP, json.dumps({"uid": uid, "amount": deduction}))
         create_transaction(uid, deduction, "checkout")
+        new_balance = balance + deduction
+        upsert_card(uid, new_balance)
+        receipt = create_receipt(uid, pending["amount"], pending["items"], pending.get("initiated_by") or "unknown")
         socketio.emit(
             "checkout_result",
             {
@@ -322,8 +508,9 @@ def on_message(client, userdata, msg):
                 "session_id": pending["session_id"],
                 "uid": uid,
                 "charged": pending["amount"],
-                "new_balance": balance + deduction,
+                "new_balance": new_balance,
                 "items": pending["items"],
+                "receipt": receipt,
             },
         )
     else:
@@ -359,24 +546,106 @@ def index():
     return render_template("dashboard.html")
 
 
+@app.route("/api/signup", methods=["POST"])
+def signup():
+    data = request.get_json(silent=True) or {}
+    username = str(data.get("username", "")).strip()
+    password = str(data.get("password", ""))
+    role = str(data.get("role", "salesperson")).strip().lower()
+
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{3,64}", username):
+        return jsonify({"status": "error", "message": "Username must be 3-64 chars (letters, numbers, _, ., -)."}), 400
+    if len(password) < 6:
+        return jsonify({"status": "error", "message": "Password must be at least 6 characters."}), 400
+    if role not in VALID_ROLES:
+        return jsonify({"status": "error", "message": "Role must be agent, salesperson, or admin."}), 400
+
+    conn = get_conn()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "INSERT INTO users (username, role, password_hash) VALUES (?, ?, ?)",
+            (username, role, generate_password_hash(password)),
+        )
+        user_id = cursor.lastrowid
+        conn.commit()
+    except sqlite3.IntegrityError:
+        conn.close()
+        return jsonify({"status": "error", "message": "Username is already taken."}), 409
+    conn.close()
+
+    token = issue_auth_token(user_id)
+    return jsonify(
+        {"status": "signed_up", "token": token, "user": {"id": user_id, "username": username, "role": role}}
+    )
+
+
+@app.route("/api/login", methods=["POST"])
+def login():
+    data = request.get_json(silent=True) or {}
+    username = str(data.get("username", "")).strip()
+    password = str(data.get("password", ""))
+    if not username or not password:
+        return jsonify({"status": "error", "message": "Username and password are required."}), 400
+
+    conn = get_conn()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, username, role, password_hash FROM users WHERE username = ?", (username,))
+    row = cursor.fetchone()
+    conn.close()
+
+    if not row or not check_password_hash(row["password_hash"], password):
+        return jsonify({"status": "error", "message": "Invalid username or password."}), 401
+
+    token = issue_auth_token(row["id"])
+    return jsonify(
+        {
+            "status": "logged_in",
+            "token": token,
+            "user": {"id": row["id"], "username": row["username"], "role": row["role"]},
+        }
+    )
+
+
+@app.route("/api/me", methods=["GET"])
+@auth_required
+def me():
+    return jsonify({"user": g.current_user})
+
+
+@app.route("/api/logout", methods=["POST"])
+@auth_required
+def logout():
+    conn = get_conn()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM auth_tokens WHERE token = ?", (g.auth_token,))
+    conn.commit()
+    conn.close()
+    return jsonify({"status": "logged_out"})
+
+
 @app.route("/api/bootstrap", methods=["GET"])
+@auth_required
 def bootstrap():
     ensure_menu_items()
-    return jsonify({"menu": get_menu_items(), "summary": get_summary()})
+    return jsonify({"menu": get_menu_items(), "summary": get_summary(), "user": g.current_user})
 
 
 @app.route("/api/summary", methods=["GET"])
+@auth_required
 def summary():
     return jsonify(get_summary())
 
 
 @app.route("/api/menu", methods=["GET"])
+@auth_required
 def menu_list():
     ensure_menu_items()
     return jsonify({"menu": get_menu_items()})
 
 
 @app.route("/api/menu", methods=["POST"])
+@auth_required
 def menu_create():
     data = request.get_json(silent=True) or {}
     name = str(data.get("name", "")).strip()
@@ -403,6 +672,7 @@ def menu_create():
 
 
 @app.route("/api/menu/<item_id>", methods=["PUT"])
+@auth_required
 def menu_update(item_id):
     data = request.get_json(silent=True) or {}
     name = str(data.get("name", "")).strip()
@@ -431,6 +701,7 @@ def menu_update(item_id):
 
 
 @app.route("/api/menu/<item_id>", methods=["DELETE"])
+@auth_required
 def menu_delete(item_id):
     conn = get_conn()
     cursor = conn.cursor()
@@ -444,6 +715,7 @@ def menu_delete(item_id):
 
 
 @app.route("/api/menu/reset", methods=["POST"])
+@auth_required
 def menu_reset():
     conn = get_conn()
     cursor = conn.cursor()
@@ -458,6 +730,8 @@ def menu_reset():
 
 
 @app.route("/api/checkout", methods=["POST"])
+@auth_required
+@role_required("salesperson", "admin")
 def start_checkout():
     global checkout_queue
     data = request.get_json(silent=True) or {}
@@ -472,6 +746,8 @@ def start_checkout():
             "session_id": session_id,
             "amount": checkout["total"],
             "items": checkout["items"],
+            "initiated_by": g.current_user["username"],
+            "initiated_role": g.current_user["role"],
         }
 
     return jsonify(
@@ -485,6 +761,8 @@ def start_checkout():
 
 
 @app.route("/api/topup", methods=["POST"])
+@auth_required
+@role_required("agent", "admin")
 def topup():
     data = request.get_json(silent=True) or {}
     uid = str(data.get("uid", "")).strip()
@@ -505,4 +783,4 @@ def topup():
 
 
 if __name__ == "__main__":
-    socketio.run(app, debug=True, host="0.0.0.0", port=6000)
+    socketio.run(app, debug=True, host="0.0.0.0", port=9215)
