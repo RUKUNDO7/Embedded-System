@@ -1,4 +1,4 @@
-# Rukundo Project Structure
+# Rk Project Structure
 
 This project now runs from the repository root (`R:\Embedded`).
 
@@ -6,7 +6,7 @@ This project now runs from the repository root (`R:\Embedded`).
 R:\Embedded
   app.py
   dashboard.html
-  rukundo.db
+  rk.db
   main.py
   README.md
   .gitignore
@@ -23,6 +23,7 @@ python app.py
 Then open:
 
 - `http://127.0.0.1:9215/`
+- `http://157.173.101.159:9215/` (deployed dashboard)
 
 ## Files to Edit
 
