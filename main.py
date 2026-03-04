@@ -18,7 +18,7 @@ while not wlan.isconnected():
 print("\n[DEBUG] WiFi Connected! IP:", wlan.ifconfig()[0])
 
 # --- 2. CONFIG & TOPICS ---
-TEAM_ID = "team_rukundo_20266" 
+TEAM_ID = "team_rk_20266" 
 MQTT_BROKER = "157.173.101.159"
 
 TOPIC_TOPUP = "rfid/{}/card/topup".format(TEAM_ID)
